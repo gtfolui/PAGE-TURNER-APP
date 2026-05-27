@@ -424,7 +424,8 @@ def profile(request, username=None):
 # ---------------------------------------------------------------------------
 @login_required
 def book_detail(request, book_id):
-    """Return JSON for the modal (book details + user's current state)."""
+    """Return JSON for the modal: book details, user's state, community
+    reviews, rating breakdown, author bibliography."""
     book = get_object_or_404(Book, pk=book_id)
     try:
         ub = UserBook.objects.get(user=request.user, book=book)
@@ -436,20 +437,86 @@ def book_detail(request, book_id):
         user_rating = 0
         user_review = ""
 
+    # Community reviews (everyone except the current user, most recent first).
+    community = (
+        UserBook.objects
+        .filter(book=book)
+        .exclude(user=request.user)
+        .exclude(rating=0, review="")
+        .select_related("user", "user__profile")
+        .order_by("-updated_at")[:30]
+    )
+    reviews = []
+    for r in community:
+        reviews.append({
+            "username": r.user.username,
+            "display_name": r.user.profile.display_name,
+            "initials": r.user.profile.initials,
+            "avatar_a": r.user.profile.avatar_color_a,
+            "avatar_b": r.user.profile.avatar_color_b,
+            "rating": r.rating,
+            "review": r.review,
+            "shelf": r.shelf,
+            "updated_at": r.updated_at.strftime("%b %d, %Y"),
+        })
+
+    # Star-distribution breakdown — for the Goodreads-style bar chart.
+    rating_breakdown = {5: 0, 4: 0, 3: 0, 2: 0, 1: 0}
+    rated_qs = UserBook.objects.filter(book=book).exclude(rating=0)
+    for r in rated_qs.values("rating"):
+        v = r["rating"]
+        if v in rating_breakdown:
+            rating_breakdown[v] += 1
+    rated_count = sum(rating_breakdown.values())
+
+    # Shelf counts so the modal can show "X read · Y reading · Z want".
+    shelf_counts = {}
+    for shelf_key, _label in UserBook.SHELF_CHOICES:
+        shelf_counts[shelf_key] = UserBook.objects.filter(book=book, shelf=shelf_key).count()
+
+    # Other books by the same author (in our catalog).
+    other_by_author = (
+        Book.objects
+        .filter(author__iexact=book.author)
+        .exclude(pk=book.pk)
+        .order_by("-avg_rating")[:6]
+    )
+    more_books = [{
+        "id": b.id,
+        "title": b.title,
+        "cover_url": b.cover_url,
+        "cover_bg": b.cover_bg,
+        "cover_color": b.cover_color,
+        "avg_rating": b.avg_rating,
+        "year": b.year,
+    } for b in other_by_author]
+
+    # Books-by-author count for the "About the author" section.
+    author_book_count = Book.objects.filter(author__iexact=book.author).count()
+
     return JsonResponse({
         "id": book.id,
         "title": book.title,
         "author": book.author,
         "genre": book.get_genre_display(),
         "avg_rating": book.avg_rating,
+        "rated_count": rated_count,
+        "review_count": rated_qs.exclude(review="").count(),
+        "rating_breakdown": rating_breakdown,
         "pages": book.pages,
         "year": book.year,
         "description": book.description,
         "cover_bg": book.cover_bg,
         "cover_color": book.cover_color,
+        "cover_url": book.cover_url,
+        "source": book.source,
         "user_shelf": user_shelf,
         "user_rating": user_rating,
         "user_review": user_review,
+        "reviews": reviews,
+        "shelf_counts": shelf_counts,
+        "more_by_author": more_books,
+        "author_book_count": author_book_count,
     })
 
 
