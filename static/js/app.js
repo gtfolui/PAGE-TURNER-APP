@@ -77,6 +77,23 @@
   let userRating = 0;
   let selectedShelf = "";
 
+  function escapeHtml(s) {
+    if (s == null) return "";
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  function authorInitials(name) {
+    const parts = (name || "").trim().split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return "?";
+  }
+
   function openBook(id) {
     fetch(`/api/book/${id}/`, { credentials: "same-origin" })
       .then((r) => r.json())
@@ -85,26 +102,84 @@
         userRating = b.user_rating || 0;
         selectedShelf = "";
 
+        // Header text
         document.getElementById("modalTitle").textContent = b.title;
         document.getElementById("modalBookTitle").textContent = b.title;
-        document.getElementById("modalBookAuthor").textContent = b.author;
-        const cover = document.getElementById("modalCover");
-        cover.style.background = b.cover_bg;
-        cover.style.color = b.cover_color;
-        cover.textContent = b.title;
-        document.getElementById("modalStars").innerHTML = renderStars(b.avg_rating, 14);
-        document.getElementById("modalRating").textContent = b.avg_rating.toFixed(1) + " avg";
-        document.getElementById("modalMeta").textContent =
-          (b.pages ? b.pages + " pages · " : "") + (b.year || "");
-        document.getElementById("modalDesc").textContent = b.description || "";
+        document.getElementById("modalBookAuthor").textContent = "by " + b.author;
 
-        // Shelf badges
-        const shelfMap = {
-          reading: "Reading",
-          read: "Read",
-          want: "Want to Read",
-          favorites: "Favorites",
-        };
+        // Cover: prefer image, fall back to coloured tile with title
+        const cover = document.getElementById("modalCover");
+        cover.innerHTML = "";
+        if (b.cover_url) {
+          const img = document.createElement("img");
+          img.src = b.cover_url;
+          img.alt = b.title;
+          img.style.cssText = "width:100%;height:100%;object-fit:cover;border-radius:inherit";
+          cover.style.background = "transparent";
+          cover.appendChild(img);
+        } else {
+          cover.style.background = b.cover_bg;
+          cover.style.color = b.cover_color;
+          cover.textContent = b.title;
+        }
+
+        // Rating row
+        document.getElementById("modalStars").innerHTML = renderStars(b.avg_rating, 18);
+        document.getElementById("modalRatingNum").textContent = (b.avg_rating || 0).toFixed(2);
+        const ratingMeta = b.rated_count
+          ? `${b.rated_count.toLocaleString()} rating${b.rated_count === 1 ? "" : "s"} · ${b.review_count.toLocaleString()} review${b.review_count === 1 ? "" : "s"}`
+          : "No ratings yet";
+        document.getElementById("modalRatingMeta").textContent = ratingMeta;
+
+        // Genres
+        const genresEl = document.getElementById("modalGenres");
+        const genres = [];
+        if (b.genre) genres.push(b.genre);
+        if (b.year) genres.push(String(b.year));
+        if (b.pages) genres.push(b.pages + " pages");
+        genresEl.innerHTML = genres.map((g) => `<span class="genre-pill">${escapeHtml(g)}</span>`).join("");
+
+        // Description with show more
+        const descEl = document.getElementById("modalDesc");
+        const desc = (b.description || "No description available.").trim();
+        descEl.textContent = desc;
+        const showMoreBtn = document.getElementById("modalShowMore");
+        if (desc.length > 280) {
+          descEl.classList.add("is-collapsed");
+          showMoreBtn.style.display = "inline-flex";
+          showMoreBtn.innerHTML = 'Show more <i class="ti ti-chevron-down"></i>';
+        } else {
+          descEl.classList.remove("is-collapsed");
+          showMoreBtn.style.display = "none";
+        }
+
+        // Shelf stats
+        const sc = b.shelf_counts || {};
+        const statsEl = document.getElementById("modalShelfStats");
+        const total = (sc.reading || 0) + (sc.read || 0) + (sc.want || 0) + (sc.favorites || 0);
+        if (total) {
+          const parts = [];
+          if (sc.read) parts.push(`<span><i class="ti ti-check"></i> ${sc.read} read</span>`);
+          if (sc.reading) parts.push(`<span><i class="ti ti-book-open"></i> ${sc.reading} reading</span>`);
+          if (sc.want) parts.push(`<span><i class="ti ti-bookmark"></i> ${sc.want} want to read</span>`);
+          if (sc.favorites) parts.push(`<span><i class="ti ti-heart"></i> ${sc.favorites} favorited</span>`);
+          statsEl.innerHTML = parts.join("");
+        } else {
+          statsEl.innerHTML = "";
+        }
+
+        // Want-to-read quick button — active state
+        const wantBtn = document.getElementById("modalQuickWant");
+        if (b.user_shelf === "want") {
+          wantBtn.classList.add("active");
+          wantBtn.querySelector("span").textContent = "On Want to Read";
+        } else {
+          wantBtn.classList.remove("active");
+          wantBtn.querySelector("span").textContent = "Want to Read";
+        }
+
+        // My-review section: shelf badges, star input, review text
+        const shelfMap = {reading: "Reading", read: "Read", want: "Want to Read", favorites: "Favorites"};
         document.querySelectorAll(".shelf-badge").forEach((badge) => {
           badge.classList.remove("active");
           if (shelfMap[b.user_shelf] && badge.dataset.shelf === shelfMap[b.user_shelf]) {
@@ -112,23 +187,124 @@
             selectedShelf = shelfMap[b.user_shelf];
           }
         });
-
-        // Star rating input
         const sr = document.getElementById("modalStarRating");
         sr.innerHTML = [1, 2, 3, 4, 5]
           .map((n) => `<i class="ti ti-star" data-n="${n}" aria-label="${n} stars"></i>`)
           .join("");
         updateStarUI(userRating);
-
         document.getElementById("reviewText").value = b.user_review || "";
-        document.getElementById("bookModal").style.display = "flex";
+
+        // About the author
+        const authorSec = document.getElementById("modalAuthorSection");
+        document.getElementById("modalAuthorName").textContent = b.author;
+        const authorBooks = b.author_book_count || 1;
+        document.getElementById("modalAuthorStat").textContent =
+          `${authorBooks} book${authorBooks === 1 ? "" : "s"} in PageTurner`;
+        const authorAvatar = document.getElementById("modalAuthorAvatar");
+        authorAvatar.textContent = authorInitials(b.author);
+        // Deterministic colour based on author name
+        const h = Array.from(b.author || "?").reduce((a, c) => a + c.charCodeAt(0), 0);
+        const hue1 = h % 360;
+        const hue2 = (hue1 + 40) % 360;
+        authorAvatar.style.background = `linear-gradient(135deg, hsl(${hue1},45%,55%), hsl(${hue2},45%,45%))`;
+        // More by author
+        const authorBooksEl = document.getElementById("modalAuthorBooks");
+        if (b.more_by_author && b.more_by_author.length) {
+          authorBooksEl.innerHTML = b.more_by_author.map((mb) => `
+            <div class="bk-mini-book" onclick="openBook(${mb.id})">
+              <div class="bk-mini-cover" style="background:${mb.cover_bg};color:${mb.cover_color}">
+                ${mb.cover_url
+                  ? `<img src="${escapeHtml(mb.cover_url)}" alt="${escapeHtml(mb.title)}" style="width:100%;height:100%;object-fit:cover;border-radius:inherit">`
+                  : escapeHtml(mb.title.slice(0, 40))}
+              </div>
+              <div class="bk-mini-title">${escapeHtml(mb.title.slice(0, 32))}</div>
+            </div>
+          `).join("");
+          authorBooksEl.style.display = "flex";
+        } else {
+          authorBooksEl.style.display = "none";
+        }
+        authorSec.style.display = "block";
+
+        // Community Reviews: breakdown + list
+        document.getElementById("modalBdAvg").textContent = (b.avg_rating || 0).toFixed(2);
+        document.getElementById("modalBdStars").innerHTML = renderStars(b.avg_rating, 16);
+        document.getElementById("modalBdCount").textContent =
+          `${(b.rated_count || 0).toLocaleString()} rating${b.rated_count === 1 ? "" : "s"} · ${(b.review_count || 0).toLocaleString()} review${b.review_count === 1 ? "" : "s"}`;
+
+        const bd = b.rating_breakdown || {};
+        const bdTotal = (bd[5] || 0) + (bd[4] || 0) + (bd[3] || 0) + (bd[2] || 0) + (bd[1] || 0);
+        const barsHtml = [5, 4, 3, 2, 1].map((star) => {
+          const count = bd[star] || 0;
+          const pct = bdTotal ? Math.round((count / bdTotal) * 100) : 0;
+          return `
+            <div class="bk-bd-row">
+              <div class="bk-bd-label">${star} <i class="ti ti-star-filled"></i></div>
+              <div class="bk-bd-bar"><div class="bk-bd-bar-fill" style="width:${pct}%"></div></div>
+              <div class="bk-bd-pct">${pct}%</div>
+            </div>
+          `;
+        }).join("");
+        document.getElementById("modalBdBars").innerHTML = barsHtml;
+
+        const reviewsList = document.getElementById("modalReviewsList");
+        if (b.reviews && b.reviews.length) {
+          reviewsList.innerHTML = b.reviews.map((r) => `
+            <div class="bk-review-item">
+              <div class="bk-review-avatar" style="background:linear-gradient(135deg,${escapeHtml(r.avatar_a)},${escapeHtml(r.avatar_b)})">${escapeHtml(r.initials)}</div>
+              <div class="bk-review-content">
+                <div class="bk-review-head">
+                  <a class="bk-review-name" href="/profile/${escapeHtml(r.username)}/">${escapeHtml(r.display_name)}</a>
+                  <span class="bk-review-date">${escapeHtml(r.updated_at)}</span>
+                </div>
+                ${r.rating ? `<div class="bk-review-stars">${renderStars(r.rating, 13)}</div>` : ""}
+                ${r.review ? `<div class="bk-review-text">${escapeHtml(r.review)}</div>` : ""}
+              </div>
+            </div>
+          `).join("");
+        } else {
+          reviewsList.innerHTML = '<p class="bk-empty">Be the first to review this book.</p>';
+        }
+
+        // Show modal, scrolled to top
+        const modalEl = document.getElementById("bookModal");
+        modalEl.style.display = "flex";
+        const inner = modalEl.querySelector(".modal");
+        if (inner) inner.scrollTop = 0;
       })
       .catch((e) => {
         console.error(e);
-        showToast("Couldn't load that book.", "error");
+        showToast("Couldn't load that book.");
       });
   }
   window.openBook = openBook;
+
+  // Quick shelf action from the cover area (Want to Read / On Want to Read)
+  window.quickShelf = function (shelfKey) {
+    if (!currentBookId) return;
+    const labelMap = {reading: "Reading", read: "Read", want: "Want to Read", favorites: "Favorites"};
+    const label = labelMap[shelfKey] || "Want to Read";
+    postJSON(`/api/book/${currentBookId}/save/`, {shelf: label}).then(({ ok, data }) => {
+      showToast((data && data.message) || (ok ? "Saved." : "Couldn't save."));
+      if (ok) {
+        // Reload modal to refresh stats
+        openBook(currentBookId);
+      }
+    });
+  };
+
+  // Show more / Show less for the description
+  window.toggleDesc = function () {
+    const d = document.getElementById("modalDesc");
+    const btn = document.getElementById("modalShowMore");
+    if (d.classList.contains("is-collapsed")) {
+      d.classList.remove("is-collapsed");
+      btn.innerHTML = 'Show less <i class="ti ti-chevron-up"></i>';
+    } else {
+      d.classList.add("is-collapsed");
+      btn.innerHTML = 'Show more <i class="ti ti-chevron-down"></i>';
+    }
+  };
 
   function closeModal(e) {
     if (!e || e.target.id === "bookModal") {
